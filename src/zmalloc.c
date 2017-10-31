@@ -44,13 +44,14 @@ void zlibc_free(void *ptr) {
 #include "config.h"
 #include "zmalloc.h"
 
+/* 额外分配PREFIX_SIZE字节用于保存已分配的内存块的字节数 */
 #ifdef HAVE_MALLOC_SIZE
 #define PREFIX_SIZE (0)
 #else
 #if defined(__sun) || defined(__sparc) || defined(__sparc__)
 #define PREFIX_SIZE (sizeof(long long))
 #else
-#define PREFIX_SIZE (sizeof(size_t))
+#define PREFIX_SIZE (sizeof(size_t)) // size_t是无符号整型的别称
 #endif
 #endif
 
@@ -88,8 +89,12 @@ void zlibc_free(void *ptr) {
 
 #endif
 
+/* The address of a block returned by malloc or realloc in GNU systems 
+ * is always a multiple of eight (or sixteen on 64-bit systems).
+ */
 #define update_zmalloc_stat_alloc(__n) do { \
     size_t _n = (__n); \
+    // 对malloc传入的参数进行补位得到实际分配的内存块字节数
     if (_n&(sizeof(long)-1)) _n += sizeof(long)-(_n&(sizeof(long)-1)); \
     if (zmalloc_thread_safe) { \
         update_zmalloc_stat_add(_n); \
@@ -124,14 +129,14 @@ static void (*zmalloc_oom_handler)(size_t) = zmalloc_default_oom;
 void *zmalloc(size_t size) {
     void *ptr = malloc(size+PREFIX_SIZE);
 
-    if (!ptr) zmalloc_oom_handler(size);
+    if (!ptr) zmalloc_oom_handler(size); // 分配内存块失败返回空指针
 #ifdef HAVE_MALLOC_SIZE
     update_zmalloc_stat_alloc(zmalloc_size(ptr));
     return ptr;
 #else
-    *((size_t*)ptr) = size;
+    *((size_t*)ptr) = size; // 保存已分配的内存块的字节数
     update_zmalloc_stat_alloc(size+PREFIX_SIZE);
-    return (char*)ptr+PREFIX_SIZE;
+    return (char*)ptr+PREFIX_SIZE; // 跳过PREFIX_SIZE
 #endif
 }
 
@@ -156,7 +161,7 @@ void *zrealloc(void *ptr, size_t size) {
     size_t oldsize;
     void *newptr;
 
-    if (ptr == NULL) return zmalloc(size);
+    if (ptr == NULL) return zmalloc(size); // 内存块尚未分配，使用zmalloc
 #ifdef HAVE_MALLOC_SIZE
     oldsize = zmalloc_size(ptr);
     newptr = realloc(ptr,size);
@@ -167,20 +172,23 @@ void *zrealloc(void *ptr, size_t size) {
     return newptr;
 #else
     realptr = (char*)ptr-PREFIX_SIZE;
-    oldsize = *((size_t*)realptr);
+    oldsize = *((size_t*)realptr); // 回退PREFIX_SIZE得到已分配的内存块字节数
     newptr = realloc(realptr,size+PREFIX_SIZE);
     if (!newptr) zmalloc_oom_handler(size);
 
     *((size_t*)newptr) = size;
     update_zmalloc_stat_free(oldsize);
     update_zmalloc_stat_alloc(size);
-    return (char*)newptr+PREFIX_SIZE;
+    return (char*)newptr+PREFIX_SIZE; // 跳过PREFIX_SIZE
 #endif
 }
 
 /* Provide zmalloc_size() for systems where this function is not provided by
  * malloc itself, given that in that case we store a header with this
- * information as the first bytes of every allocation. */
+ * information as the first bytes of every allocation. 
+ *
+ * 获取ptr相关的已实际分配的内存块字节数
+ */
 #ifndef HAVE_MALLOC_SIZE
 size_t zmalloc_size(void *ptr) {
     void *realptr = (char*)ptr-PREFIX_SIZE;
@@ -210,6 +218,7 @@ void zfree(void *ptr) {
 #endif
 }
 
+ /* 复制字符串 */
 char *zstrdup(const char *s) {
     size_t l = strlen(s)+1;
     char *p = zmalloc(l);
@@ -218,6 +227,7 @@ char *zstrdup(const char *s) {
     return p;
 }
 
+/* 获取已实际分配的内存块字节数 */
 size_t zmalloc_used_memory(void) {
     size_t um;
 
@@ -262,7 +272,7 @@ void zmalloc_set_oom_handler(void (*oom_handler)(size_t)) {
 #include <fcntl.h>
 
 size_t zmalloc_get_rss(void) {
-    int page = sysconf(_SC_PAGESIZE);
+    int page = sysconf(_SC_PAGESIZE); // getconf PAGESIZE
     size_t rss;
     char buf[4096];
     char filename[256];
@@ -280,15 +290,15 @@ size_t zmalloc_get_rss(void) {
     p = buf;
     count = 23; /* RSS is the 24th field in /proc/<pid>/stat */
     while(p && count--) {
-        p = strchr(p,' ');
-        if (p) p++;
+        p = strchr(p,' '); // 下一个空格的下标，/proc/<pid>/stat中使用空格分隔数据
+        if (p) p++; // 跳过空格
     }
     if (!p) return 0;
     x = strchr(p,' ');
     if (!x) return 0;
-    *x = '\0';
+    *x = '\0'; // 设置标志位，截取第24个子串
 
-    rss = strtoll(p,NULL,10);
+    rss = strtoll(p,NULL,10); // 转为10进制
     rss *= page;
     return rss;
 }
