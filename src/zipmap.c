@@ -80,8 +80,8 @@
 #include "zmalloc.h"
 #include "endianconv.h"
 
-#define ZIPMAP_BIGLEN 254
-#define ZIPMAP_END 255
+#define ZIPMAP_BIGLEN 254 // 1字节最大存储255，255用于标识尾部，254用于标识最大值
+#define ZIPMAP_END 255 // 尾部标识
 
 /* The following defines the max value for the <free> field described in the
  * comments above, that is, the max number of trailing bytes in a value. */
@@ -89,7 +89,10 @@
 
 /* The following macro returns the number of bytes needed to encode the length
  * for the integer value _l, that is, 1 byte for lengths < ZIPMAP_BIGLEN and
- * 5 bytes for all the other lengths. */
+ * 5 bytes for all the other lengths. 
+ *
+ * 1字节不足以存储“长度”时使用额外的4字节
+ */
 #define ZIPMAP_LEN_BYTES(_l) (((_l) < ZIPMAP_BIGLEN) ? 1 : sizeof(unsigned int)+1)
 
 /* Create a new empty zipmap. */
@@ -105,8 +108,8 @@ unsigned char *zipmapNew(void) {
 static unsigned int zipmapDecodeLength(unsigned char *p) {
     unsigned int len = *p;
 
-    if (len < ZIPMAP_BIGLEN) return len;
-    memcpy(&len,p+1,sizeof(unsigned int));
+    if (len < ZIPMAP_BIGLEN) return len; // 小于ZIPMAP_BIGLEN说明1字节足以存储
+    memcpy(&len,p+1,sizeof(unsigned int)); // 否则使用其后额外增加的字节
     memrev32ifbe(&len);
     return len;
 }
@@ -117,12 +120,12 @@ static unsigned int zipmapEncodeLength(unsigned char *p, unsigned int len) {
     if (p == NULL) {
         return ZIPMAP_LEN_BYTES(len);
     } else {
-        if (len < ZIPMAP_BIGLEN) {
+        if (len < ZIPMAP_BIGLEN) { // 小于ZIPMAP_BIGLEN说明1字节足以存储
             p[0] = len;
             return 1;
         } else {
-            p[0] = ZIPMAP_BIGLEN;
-            memcpy(p+1,&len,sizeof(len));
+            p[0] = ZIPMAP_BIGLEN; // 1字节不足时，ZIPMAP_BIGLEN作为标识
+            memcpy(p+1,&len,sizeof(len)); // 使用其后额外增加的字节
             memrev32ifbe(p+1);
             return 1+sizeof(len);
         }
@@ -134,7 +137,10 @@ static unsigned int zipmapEncodeLength(unsigned char *p, unsigned int len) {
  *
  * If NULL is returned, and totlen is not NULL, it is set to the entire
  * size of the zimap, so that the calling function will be able to
- * reallocate the original zipmap to make room for more entries. */
+ * reallocate the original zipmap to make room for more entries. 
+ *
+ * zipmapSet、zipmapDel、zipmapGet、zipmapExists均依赖于此
+ */
 static unsigned char *zipmapLookupRaw(unsigned char *zm, unsigned char *key, unsigned int klen, unsigned int *totlen) {
     unsigned char *p = zm+1, *k = NULL;
     unsigned int l,llen;
@@ -143,8 +149,8 @@ static unsigned char *zipmapLookupRaw(unsigned char *zm, unsigned char *key, uns
         unsigned char free;
 
         /* Match or skip the key */
-        l = zipmapDecodeLength(p);
-        llen = zipmapEncodeLength(NULL,l);
+        l = zipmapDecodeLength(p); // 键长度
+        llen = zipmapEncodeLength(NULL,l); // 储存键长度所需的字节数
         if (key != NULL && k == NULL && l == klen && !memcmp(p+llen,key,l)) {
             /* Only return when the user doesn't care
              * for the total length of the zipmap. */
@@ -154,40 +160,41 @@ static unsigned char *zipmapLookupRaw(unsigned char *zm, unsigned char *key, uns
                 return p;
             }
         }
-        p += llen+l;
+        p += llen+l; // 跳过键长度，键
         /* Skip the value as well */
-        l = zipmapDecodeLength(p);
-        p += zipmapEncodeLength(NULL,l);
-        free = p[0];
-        p += l+1+free; /* +1 to skip the free byte */
+        l = zipmapDecodeLength(p); // 值长度
+        p += zipmapEncodeLength(NULL,l); // 储存值长度所需的字节数，跳过值长度
+        free = p[0]; // 值空闲空间
+        p += l+1+free; /* +1 to skip the free byte */ // 跳过值、值空闲空间，还有用于存储值空闲空间的1字节
     }
-    if (totlen != NULL) *totlen = (unsigned int)(p-zm)+1;
+    if (totlen != NULL) *totlen = (unsigned int)(p-zm)+1; // 整个zipmap使用的字节数
     return k;
 }
 
+/* 获取存储键值对所需的字节数 */
 static unsigned long zipmapRequiredLength(unsigned int klen, unsigned int vlen) {
     unsigned int l;
 
-    l = klen+vlen+3;
-    if (klen >= ZIPMAP_BIGLEN) l += 4;
-    if (vlen >= ZIPMAP_BIGLEN) l += 4;
+    l = klen+vlen+3; // 存储键长度、值长度、值空闲空间需要额外的3字节
+    if (klen >= ZIPMAP_BIGLEN) l += 4; // 1字节存储键长度不足时额外增加4字节
+    if (vlen >= ZIPMAP_BIGLEN) l += 4; // 1字节存储值长度不足时额外增加4字节
     return l;
 }
 
 /* Return the total amount used by a key (encoded length + payload) */
 static unsigned int zipmapRawKeyLength(unsigned char *p) {
-    unsigned int l = zipmapDecodeLength(p);
-    return zipmapEncodeLength(NULL,l) + l;
+    unsigned int l = zipmapDecodeLength(p); // 键长度
+    return zipmapEncodeLength(NULL,l) + l; // zipmapEncodeLength返回存储键长度所需的字节数，再加上键长度
 }
 
 /* Return the total amount used by a value
  * (encoded length + single byte free count + payload) */
 static unsigned int zipmapRawValueLength(unsigned char *p) {
-    unsigned int l = zipmapDecodeLength(p);
+    unsigned int l = zipmapDecodeLength(p); // 值长度
     unsigned int used;
 
-    used = zipmapEncodeLength(NULL,l);
-    used += p[used] + 1 + l;
+    used = zipmapEncodeLength(NULL,l); // zipmapEncodeLength返回存储值长度所需的字节数
+    used += p[used] + 1 + l; // p[used]表示值空闲空间占用的字节数，再加上存储值空闲空间的1字节和值长度
     return used;
 }
 
@@ -201,7 +208,7 @@ static unsigned int zipmapRawEntryLength(unsigned char *p) {
 
 static inline unsigned char *zipmapResize(unsigned char *zm, unsigned int len) {
     zm = zrealloc(zm, len);
-    zm[len-1] = ZIPMAP_END;
+    zm[len-1] = ZIPMAP_END; // 扩容后重新设置尾部标识
     return zm;
 }
 
@@ -223,7 +230,7 @@ unsigned char *zipmapSet(unsigned char *zm, unsigned char *key, unsigned int kle
         p = zm+zmlen-1;
         zmlen = zmlen+reqlen;
 
-        /* Increase zipmap length (this is an insert) */
+        /* Increase zipmap length (this is an insert) */ // size++
         if (zm[0] < ZIPMAP_BIGLEN) zm[0]++;
     } else {
         /* Key found. Is there enough space for the new value? */
@@ -317,15 +324,15 @@ unsigned char *zipmapNext(unsigned char *zm, unsigned char **key, unsigned int *
     if (key) {
         *key = zm;
         *klen = zipmapDecodeLength(zm);
-        *key += ZIPMAP_LEN_BYTES(*klen);
+        *key += ZIPMAP_LEN_BYTES(*klen); // 跳过键长度
     }
-    zm += zipmapRawKeyLength(zm);
+    zm += zipmapRawKeyLength(zm); // 键
     if (value) {
-        *value = zm+1;
+        *value = zm+1; // 跳过用于存储值空闲空间的1字节
         *vlen = zipmapDecodeLength(zm);
-        *value += ZIPMAP_LEN_BYTES(*vlen);
+        *value += ZIPMAP_LEN_BYTES(*vlen); // 跳过值长度
     }
-    zm += zipmapRawValueLength(zm);
+    zm += zipmapRawValueLength(zm); // 值
     return zm;
 }
 
@@ -335,9 +342,9 @@ int zipmapGet(unsigned char *zm, unsigned char *key, unsigned int klen, unsigned
     unsigned char *p;
 
     if ((p = zipmapLookupRaw(zm,key,klen,NULL)) == NULL) return 0;
-    p += zipmapRawKeyLength(p);
+    p += zipmapRawKeyLength(p); // 跳过键
     *vlen = zipmapDecodeLength(p);
-    *value = p + ZIPMAP_LEN_BYTES(*vlen) + 1;
+    *value = p + ZIPMAP_LEN_BYTES(*vlen) + 1; // 跳过值长度，跳过用于存储值空闲空间的1字节
     return 1;
 }
 
@@ -413,19 +420,26 @@ int main(void) {
     zm = zipmapSet(zm,(unsigned char*) "surname",7, (unsigned char*) "foo",3,NULL);
     zm = zipmapSet(zm,(unsigned char*) "age",3, (unsigned char*) "foo",3,NULL);
     zipmapRepr(zm);
+ 	// {status 3}{key 4}name{value 3}foo{key 7}surname{value 3}foo{key 3}age{value 3}foo
 
     zm = zipmapSet(zm,(unsigned char*) "hello",5, (unsigned char*) "world!",6,NULL);
     zm = zipmapSet(zm,(unsigned char*) "foo",3, (unsigned char*) "bar",3,NULL);
     zm = zipmapSet(zm,(unsigned char*) "foo",3, (unsigned char*) "!",1,NULL);
     zipmapRepr(zm);
+	// {status 3}{key 4}name{value 3}foo{key 7}surname{value 3}foo{key 3}age{value 3}foo{key 5}hello{value 6}world!{key 3}foo{value 1}!..
     zm = zipmapSet(zm,(unsigned char*) "foo",3, (unsigned char*) "12345",5,NULL);
     zipmapRepr(zm);
+	// {status 3}{key 4}name{value 3}foo{key 7}surname{value 3}foo{key 3}age{value 3}foo{key 5}hello{value 6}world!{key 3}foo{value 5}12345
     zm = zipmapSet(zm,(unsigned char*) "new",3, (unsigned char*) "xx",2,NULL);
     zm = zipmapSet(zm,(unsigned char*) "noval",5, (unsigned char*) "",0,NULL);
     zipmapRepr(zm);
     zm = zipmapDel(zm,(unsigned char*) "new",3,NULL);
     zipmapRepr(zm);
 
+	/* .*s
+	 * The precision is not specified in the format string, 
+	 * but as an additional integer value argument preceding the argument that has to be formatted.
+	 */
     printf("\nLook up large key:\n");
     {
         unsigned char buf[512];
