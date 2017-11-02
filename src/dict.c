@@ -178,8 +178,8 @@ dict *dictCreate(dictType *type,
 int _dictInit(dict *d, dictType *type,
         void *privDataPtr)
 {
-    _dictReset(&d->ht[0]);
-    _dictReset(&d->ht[1]);
+    _dictReset(&d->ht[0]); // 初始化表0
+    _dictReset(&d->ht[1]); // 初始化表1
     d->type = type;
     d->privdata = privDataPtr;
     d->rehashidx = -1;
@@ -204,16 +204,16 @@ int dictResize(dict *d)
 int dictExpand(dict *d, unsigned long size)
 {
     dictht n; /* the new hash table */
-    unsigned long realsize = _dictNextPower(size);
+    unsigned long realsize = _dictNextPower(size); // 要求哈希表的长度为2的指数倍
 
     /* the size is invalid if it is smaller than the number of
      * elements already inside the hash table */
-    if (dictIsRehashing(d) || d->ht[0].used > size)
+    if (dictIsRehashing(d) || d->ht[0].used > size) // rehash完成前不应该再次扩容
         return DICT_ERR;
 
     /* Allocate the new hash table and initialize all pointers to NULL */
     n.size = realsize;
-    n.sizemask = realsize-1;
+    n.sizemask = realsize-1; // 长度（二进制）为100，则掩码（二进制）为11
     n.table = zcalloc(realsize*sizeof(dictEntry*));
     n.used = 0;
 
@@ -252,7 +252,7 @@ int dictRehash(dict *d, int n) {
         /* Note that rehashidx can't overflow as we are sure there are more
          * elements because ht[0].used != 0 */
         assert(d->ht[0].size > (unsigned long)d->rehashidx);
-        while(d->ht[0].table[d->rehashidx] == NULL) d->rehashidx++;
+        while(d->ht[0].table[d->rehashidx] == NULL) d->rehashidx++; // 对表0中从rehashidx开始的第一个不为空的链表进行rehash
         de = d->ht[0].table[d->rehashidx];
         /* Move all the keys in this bucket from the old to the new hash HT */
         while(de) {
@@ -260,11 +260,11 @@ int dictRehash(dict *d, int n) {
 
             nextde = de->next;
             /* Get the index in the new hash table */
-            h = dictHashKey(d, de->key) & d->ht[1].sizemask;
+            h = dictHashKey(d, de->key) & d->ht[1].sizemask; // 计算键的哈希值后对新的表长度取余
             de->next = d->ht[1].table[h];
-            d->ht[1].table[h] = de;
-            d->ht[0].used--;
-            d->ht[1].used++;
+            d->ht[1].table[h] = de; // 后rehash的entry插入到链表头部
+            d->ht[0].used--; // 修改表0的used
+            d->ht[1].used++; // 修改表1的used
             de = nextde;
         }
         d->ht[0].table[d->rehashidx] = NULL;
@@ -310,7 +310,7 @@ int dictAdd(dict *d, void *key, void *val)
     dictEntry *entry = dictAddRaw(d,key);
 
     if (!entry) return DICT_ERR;
-    dictSetVal(d, entry, val);
+    dictSetVal(d, entry, val); // 新增entry成功，保存值到entry
     return DICT_OK;
 }
 
@@ -335,7 +335,9 @@ dictEntry *dictAddRaw(dict *d, void *key)
     dictEntry *entry;
     dictht *ht;
 
-    if (dictIsRehashing(d)) _dictRehashStep(d);
+    if (dictIsRehashing(d)) _dictRehashStep(d); 
+	// 扩容后dictExpand中修改rehashidx为0，后续的每次dictAddRaw会对表0进行rehash，
+	// 直至表0中的entry全部rehash到表1中，rehashidx重新被修改为0
 
     /* Get the index of the new element, or -1 if
      * the element already exists. */
@@ -343,14 +345,14 @@ dictEntry *dictAddRaw(dict *d, void *key)
         return NULL;
 
     /* Allocate the memory and store the new entry */
-    ht = dictIsRehashing(d) ? &d->ht[1] : &d->ht[0];
+    ht = dictIsRehashing(d) ? &d->ht[1] : &d->ht[0]; // 开始rehash后，表0中的entry逐步rehash到表1中，新增的entry也添加到表1中
     entry = zmalloc(sizeof(*entry));
-    entry->next = ht->table[index];
+    entry->next = ht->table[index]; // 新增的entry插入到链表头部
     ht->table[index] = entry;
-    ht->used++;
+    ht->used++; // 修改used
 
     /* Set the hash entry fields. */
-    dictSetKey(d, entry, key);
+    dictSetKey(d, entry, key); // 保存键到entry
     return entry;
 }
 
@@ -364,7 +366,7 @@ int dictReplace(dict *d, void *key, void *val)
 
     /* Try to add the element. If the key
      * does not exists dictAdd will suceed. */
-    if (dictAdd(d, key, val) == DICT_OK)
+    if (dictAdd(d, key, val) == DICT_OK) // 先尝试直接添加entry
         return 1;
     /* It already exists, get the entry */
     entry = dictFind(d, key);
@@ -399,7 +401,7 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
     int table;
 
     if (d->ht[0].size == 0) return DICT_ERR; /* d->ht[0].table is NULL */
-    if (dictIsRehashing(d)) _dictRehashStep(d);
+    if (dictIsRehashing(d)) _dictRehashStep(d);  // rehash完成前每次dictGenericDelete也会对表0进行rehash
     h = dictHashKey(d, key);
 
     for (table = 0; table <= 1; table++) {
@@ -407,13 +409,13 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
         he = d->ht[table].table[idx];
         prevHe = NULL;
         while(he) {
-            if (dictCompareKeys(d, key, he->key)) {
+            if (dictCompareKeys(d, key, he->key)) { // 遍历整个链表判断键是否存在
                 /* Unlink the element from the list */
-                if (prevHe)
+                if (prevHe) // 待删除的entry不在链表头部
                     prevHe->next = he->next;
-                else
+                else // 待删除的entry在链表头部
                     d->ht[table].table[idx] = he->next;
-                if (!nofree) {
+                if (!nofree) { // 是否对待删除的entry中的键、值进行处理
                     dictFreeKey(d, he);
                     dictFreeVal(d, he);
                 }
@@ -478,7 +480,8 @@ dictEntry *dictFind(dict *d, const void *key)
     unsigned int h, idx, table;
 
     if (d->ht[0].size == 0) return NULL; /* We don't have a table at all */
-    if (dictIsRehashing(d)) _dictRehashStep(d);
+    if (dictIsRehashing(d)) _dictRehashStep(d); // rehash完成前每次dictFind也会对表0进行rehash
+    // 下面一部分与_dictKeyIndex中的逻辑一致
     h = dictHashKey(d, key);
     for (table = 0; table <= 1; table++) {
         idx = h & d->ht[table].sizemask;
@@ -565,13 +568,13 @@ dictEntry *dictNext(dictIterator *iter)
             dictht *ht = &iter->d->ht[iter->table];
             if (iter->index == -1 && iter->table == 0) {
                 if (iter->safe)
-                    iter->d->iterators++;
+                    iter->d->iterators++; // 安全迭代时iterators不为0，_dictRehashStep中会对此进行判断，所以安全迭代时会限制rehash
                 else
-                    iter->fingerprint = dictFingerprint(iter->d);
+                    iter->fingerprint = dictFingerprint(iter->d); // 非安全迭代时计算哈希表的指纹，迭代结束后会比对指纹是否一致
             }
             iter->index++;
             if (iter->index >= (long) ht->size) {
-                if (dictIsRehashing(iter->d) && iter->table == 0) {
+                if (dictIsRehashing(iter->d) && iter->table == 0) { // rehash未完成前需要遍历表1中的entry
                     iter->table++;
                     iter->index = 0;
                     ht = &iter->d->ht[1];
@@ -597,9 +600,9 @@ void dictReleaseIterator(dictIterator *iter)
 {
     if (!(iter->index == -1 && iter->table == 0)) {
         if (iter->safe)
-            iter->d->iterators--;
+            iter->d->iterators--; // 安全迭代结束后去除对rehash的限制
         else
-            assert(iter->fingerprint == dictFingerprint(iter->d));
+            assert(iter->fingerprint == dictFingerprint(iter->d)); // 非安全迭代结束后比对指纹是否一致
     }
     zfree(iter);
 }
@@ -819,7 +822,7 @@ static int _dictExpandIfNeeded(dict *d)
     if (dictIsRehashing(d)) return DICT_OK;
 
     /* If the hash table is empty expand it to the initial size. */
-    if (d->ht[0].size == 0) return dictExpand(d, DICT_HT_INITIAL_SIZE);
+    if (d->ht[0].size == 0) return dictExpand(d, DICT_HT_INITIAL_SIZE); // 第一次使用时再分配初始空间
 
     /* If we reached the 1:1 ratio, and we are allowed to resize the hash
      * table (global setting) or we should avoid it but the ratio between
@@ -862,17 +865,17 @@ static int _dictKeyIndex(dict *d, const void *key)
     if (_dictExpandIfNeeded(d) == DICT_ERR)
         return -1;
     /* Compute the key hash value */
-    h = dictHashKey(d, key);
+    h = dictHashKey(d, key); // 使用自定义的hashFunction计算键的哈希值
     for (table = 0; table <= 1; table++) {
-        idx = h & d->ht[table].sizemask;
+        idx = h & d->ht[table].sizemask; // 哈希值对表长度取余得到插入的下标
         /* Search if this slot does not already contain the given key */
         he = d->ht[table].table[idx];
-        while(he) {
-            if (dictCompareKeys(d, key, he->key))
+        while(he) { // 处理哈希冲突
+            if (dictCompareKeys(d, key, he->key)) // 遍历整个链表判断键是否已存在
                 return -1;
             he = he->next;
         }
-        if (!dictIsRehashing(d)) break;
+        if (!dictIsRehashing(d)) break; // 没有开始rehash时，表1为空，不需要判断
     }
     return idx;
 }
