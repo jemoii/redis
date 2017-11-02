@@ -311,26 +311,26 @@ int string2ll(const char *s, size_t slen, long long *value) {
     int negative = 0;
     unsigned long long v;
 
-    if (plen == slen)
+    if (plen == slen) // 处理空字符串
         return 0;
 
     /* Special case: first and only digit is 0. */
-    if (slen == 1 && p[0] == '0') {
+    if (slen == 1 && p[0] == '0') { // 处理"0"
         if (value != NULL) *value = 0;
         return 1;
     }
 
-    if (p[0] == '-') {
+    if (p[0] == '-') { // 处理负数
         negative = 1;
         p++; plen++;
 
         /* Abort on only a negative sign. */
-        if (plen == slen)
+        if (plen == slen) // 处理"-"
             return 0;
     }
 
     /* First digit should be 1-9, otherwise the string should just be 0. */
-    if (p[0] >= '1' && p[0] <= '9') {
+    if (p[0] >= '1' && p[0] <= '9') { // 除了"0"不能以'0'开头
         v = p[0]-'0';
         p++; plen++;
     } else if (p[0] == '0' && slen == 1) {
@@ -340,7 +340,7 @@ int string2ll(const char *s, size_t slen, long long *value) {
         return 0;
     }
 
-    while (plen < slen && p[0] >= '0' && p[0] <= '9') {
+    while (plen < slen && p[0] >= '0' && p[0] <= '9') { // 循环处理后面的字符，可能溢出
         if (v > (ULLONG_MAX / 10)) /* Overflow. */
             return 0;
         v *= 10;
@@ -353,10 +353,10 @@ int string2ll(const char *s, size_t slen, long long *value) {
     }
 
     /* Return if not all bytes were used. */
-    if (plen < slen)
+    if (plen < slen) // 存在非'0'至'9'的字符
         return 0;
 
-    if (negative) {
+    if (negative) { // 处理结果，可能溢出
         if (v > ((unsigned long long)(-(LLONG_MIN+1))+1)) /* Overflow. */
             return 0;
         if (value != NULL) *value = -v;
