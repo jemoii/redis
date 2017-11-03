@@ -54,15 +54,15 @@ sds sdsnewlen(const void *init, size_t initlen) {
     if (init) {
         sh = zmalloc(sizeof(struct sdshdr)+initlen+1);
     } else {
-        sh = zcalloc(sizeof(struct sdshdr)+initlen+1);
+        sh = zcalloc(sizeof(struct sdshdr)+initlen+1); // 默认将每一位初始化为0
     }
     if (sh == NULL) return NULL;
     sh->len = initlen;
     sh->free = 0;
     if (initlen && init)
         memcpy(sh->buf, init, initlen);
-    sh->buf[initlen] = '\0';
-    return (char*)sh->buf;
+    sh->buf[initlen] = '\0'; // '\0'作为尾部标识
+    return (char*)sh->buf; // sds指针默认指向buf
 }
 
 /* Create an empty (zero length) sds string. Even in this case the string
@@ -85,7 +85,7 @@ sds sdsdup(const sds s) {
 /* Free an sds string. No operation is performed if 's' is NULL. */
 void sdsfree(sds s) {
     if (s == NULL) return;
-    zfree(s-sizeof(struct sdshdr));
+    zfree(s-sizeof(struct sdshdr)); // sds指针回退，指向结构体头部
 }
 
 /* Set the sds string length to the length as obtained with strlen(), so
@@ -104,7 +104,7 @@ void sdsfree(sds s) {
  * remains 6 bytes. */
 void sdsupdatelen(sds s) {
     struct sdshdr *sh = (void*) (s-(sizeof(struct sdshdr)));
-    int reallen = strlen(s);
+    int reallen = strlen(s); // 计算len时考虑'\0'
     sh->free += (sh->len-reallen);
     sh->len = reallen;
 }
@@ -131,18 +131,18 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
     size_t free = sdsavail(s);
     size_t len, newlen;
 
-    if (free >= addlen) return s;
+    if (free >= addlen) return s; // 空闲字节不足以满足时才扩容
     len = sdslen(s);
     sh = (void*) (s-(sizeof(struct sdshdr)));
     newlen = (len+addlen);
-    if (newlen < SDS_MAX_PREALLOC)
+    if (newlen < SDS_MAX_PREALLOC) // 1M以内指数增加，以外线性增加
         newlen *= 2;
     else
         newlen += SDS_MAX_PREALLOC;
     newsh = zrealloc(sh, sizeof(struct sdshdr)+newlen+1);
     if (newsh == NULL) return NULL;
 
-    newsh->free = newlen - len;
+    newsh->free = newlen - len; // 修改free
     return newsh->buf;
 }
 
@@ -206,7 +206,7 @@ void sdsIncrLen(sds s, int incr) {
         assert(sh->len >= (unsigned int)(-incr));
     sh->len += incr;
     sh->free -= incr;
-    s[sh->len] = '\0';
+    s[sh->len] = '\0'; // 设置尾部标识
 }
 
 /* Grow the sds to have the specified length. Bytes that were not part of
@@ -224,7 +224,7 @@ sds sdsgrowzero(sds s, size_t len) {
 
     /* Make sure added region doesn't contain garbage */
     sh = (void*)(s-(sizeof(struct sdshdr)));
-    memset(s+curlen,0,(len-curlen+1)); /* also set trailing \0 byte */
+    memset(s+curlen,0,(len-curlen+1)); /* also set trailing \0 byte */ // 拼接0使其长度增加到len
     totlen = sh->len+sh->free;
     sh->len = len;
     sh->free = totlen-sh->len;
@@ -245,8 +245,8 @@ sds sdscatlen(sds s, const void *t, size_t len) {
     sh = (void*) (s-(sizeof(struct sdshdr)));
     memcpy(s+curlen, t, len);
     sh->len = curlen+len;
-    sh->free = sh->free-len;
-    s[curlen+len] = '\0';
+    sh->free = sh->free-len; // 修改free
+    s[curlen+len] = '\0'; // '\0'作为尾部标识
     return s;
 }
 
@@ -268,7 +268,7 @@ sds sdscatsds(sds s, const sds t) {
 
 /* Destructively modify the sds string 's' to hold the specified binary
  * safe string pointed by 't' of length 'len' bytes. */
-sds sdscpylen(sds s, const char *t, size_t len) {
+sds sdscpylen(sds s, const char *t, size_t len) { // 拼接t得到新的sds
     struct sdshdr *sh = (void*) (s-(sizeof(struct sdshdr)));
     size_t totlen = sh->free+sh->len;
 
@@ -279,7 +279,7 @@ sds sdscpylen(sds s, const char *t, size_t len) {
         totlen = sh->free+sh->len;
     }
     memcpy(s, t, len);
-    s[len] = '\0';
+    s[len] = '\0'; // '\0'作为尾部标识
     sh->len = len;
     sh->free = totlen-len;
     return s;
@@ -386,7 +386,7 @@ sds sdscatvprintf(sds s, const char *fmt, va_list ap) {
 
     /* Try with buffers two times bigger every time we fail to
      * fit the string in the current buffer size. */
-    while(1) {
+    while(1) { // 格式化输出的结果的长度是不确定的，循环判断尾部标识是否被覆盖，从而决定是否增加buflen
         buf[buflen-2] = '\0';
         va_copy(cpy,ap);
         vsnprintf(buf, buflen, fmt, cpy);
@@ -402,7 +402,7 @@ sds sdscatvprintf(sds s, const char *fmt, va_list ap) {
     }
 
     /* Finally concat the obtained string to the SDS string and return it. */
-    t = sdscat(s, buf);
+    t = sdscat(s, buf); // 拼接buf
     if (buf != staticbuf) zfree(buf);
     return t;
 }
@@ -569,11 +569,11 @@ sds sdstrim(sds s, const char *cset) {
 
     sp = start = s;
     ep = end = s+sdslen(s)-1;
-    while(sp <= end && strchr(cset, *sp)) sp++;
-    while(ep > start && strchr(cset, *ep)) ep--;
+    while(sp <= end && strchr(cset, *sp)) sp++; // 头指针指向的字符可以在cset中找到，头指针后移
+    while(ep > start && strchr(cset, *ep)) ep--; // 尾指针指向的字符可以在cset中找到，尾指针迁移
     len = (sp > ep) ? 0 : ((ep-sp)+1);
     if (sh->buf != sp) memmove(sh->buf, sp, len);
-    sh->buf[len] = '\0';
+    sh->buf[len] = '\0'; // 设置尾部标识
     sh->free = sh->free+(sh->len-len);
     sh->len = len;
     return s;
@@ -600,16 +600,16 @@ void sdsrange(sds s, int start, int end) {
     size_t newlen, len = sdslen(s);
 
     if (len == 0) return;
-    if (start < 0) {
+    if (start < 0) { // 支持负值下标
         start = len+start;
         if (start < 0) start = 0;
     }
-    if (end < 0) {
+    if (end < 0) { // 支持负值下标
         end = len+end;
         if (end < 0) end = 0;
     }
     newlen = (start > end) ? 0 : (end-start)+1;
-    if (newlen != 0) {
+    if (newlen != 0) { // 避免溢出
         if (start >= (signed)len) {
             newlen = 0;
         } else if (end >= (signed)len) {
@@ -620,7 +620,7 @@ void sdsrange(sds s, int start, int end) {
         start = 0;
     }
     if (start && newlen) memmove(sh->buf, sh->buf+start, newlen);
-    sh->buf[newlen] = 0;
+    sh->buf[newlen] = 0; // 设置尾部标识
     sh->free = sh->free+(sh->len-newlen);
     sh->len = newlen;
 }
@@ -742,7 +742,7 @@ void sdsfreesplitres(sds *tokens, int count) {
  * After the call, the modified sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call. */
 sds sdscatrepr(sds s, const char *p, size_t len) {
-    s = sdscatlen(s,"\"",1);
+    s = sdscatlen(s,"\"",1); // 处理前端英文引号
     while(len--) {
         switch(*p) {
         case '\\':
@@ -763,7 +763,7 @@ sds sdscatrepr(sds s, const char *p, size_t len) {
         }
         p++;
     }
-    return sdscatlen(s,"\"",1);
+    return sdscatlen(s,"\"",1); // 处理末端的英文引号
 }
 
 /* Helper function for sdssplitargs() that returns non zero if 'c'
@@ -941,7 +941,7 @@ sds sdsmapchars(sds s, const char *from, const char *to, size_t setlen) {
     for (j = 0; j < l; j++) {
         for (i = 0; i < setlen; i++) {
             if (s[j] == from[i]) {
-                s[j] = to[i];
+                s[j] = to[i]; // 替换对应下标的字符
                 break;
             }
         }
